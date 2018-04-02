@@ -1,0 +1,22 @@
+#include <stdio.h>
+#include <mpi.h>
+
+
+int main (int argv, char ** argc) {
+  MPI_Init(&argv,&argc);
+  int node,csize;
+  MPI_Comm_rank(MPI_COMM_WORLD,&node);
+  MPI_Comm_size(MPI_COMM_WORLD,&csize);
+  int val = 1;
+  
+  
+  if(node==0){
+    val = 69;
+    MPI_Send(&val,1,MPI_INT,1,0,MPI_COMM_WORLD);
+    MPI_Recv(&val,1,MPI_INT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+    
+  }
+  
+  MPI_Finalize();
+  return 0;
+}

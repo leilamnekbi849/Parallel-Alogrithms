@@ -1,0 +1,15 @@
+#include <bits/stdc++.h>
+
+using namespace std;
+
+int main (){
+  
+  fopen ("","w",stdout);
+
+  for(int i=0;i<128;i++){
+    int x = rand() % 128;
+    cout << x << " ";
+  }
+  
+  return 0;
+}
