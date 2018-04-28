@@ -1,0 +1,200 @@
+#include <stdio.h>
+#include <math.h>
+#include <stdlib.h>
+#include <mpi.h>
+#include <string.h>
+
+
+#define np 16  // no of processors 
+#define nfiles 128  // no of files 
+#define filesize 128  // no of inputs in each file 
+#define cK 32 // this is number of clusters K cK and it has to be a multiple of np 
+
+int cluster[cK/np][nfiles*filesize], cluster_pointer[cK/np];
+
+// cluster pointer keeps track of how many elements are present in a given  cluster 
+// each node has k/np clusters and max size of a cluster is total no of inputs  
+// possibility here is to use dynamic arrays instead for cluster for better memory instead of just alloting entire size of input 
+// another suggestion is that since data is evenly distributed, you should assume that no cluster gets huge amount of data, i.e you can assume roughly 
+// each cluster gets nfiles*filesize / __K data so you can multiply this by 4 to be on the safer side 
+
+float centers[np + 1][cK/np + 1]; // centers[i][j] is the jth cluster center in the ith node 
+
+int blocksize = nfiles/np; // the number of files each processor is responsible for 
+
+int data[10001],dataCount=0;
+
+
+char * toArray(int number) {
+  // converts an integer to a character array
+  //printf("file num is %d\n", number);
+  if(!number) return "0";
+
+  int n = log10(number) + 1,i = 0;
+  char *numberArray = calloc(n, sizeof(char));
+  
+  for (i = 0; i < n; ++i, number /= 10 )
+    numberArray[n-1-i] = (number % 10) + '0';
+  
+  return numberArray;
+}
+
+
+
+void  get_file_name (char * sbegin, int number){
+  // return the file name thats to be read by the node passed as an argument
+  char *send =".txt";  
+  char * mid = toArray(number);
+  sbegin[0]='\0';
+  strcat(sbegin, "MPIinputs/input");
+  strcat(sbegin,mid);
+  strcat(sbegin,send);
+}
+
+
+void read_integers(char * fname){
+  // reads integers from file to data array
+  //  printf("%s||\n",fname);
+  
+  FILE* F =  fopen(fname,"r");
+  if(!F)
+    printf("no file found for file name fname %s\n",fname);
+ 
+  
+  while(fscanf(F, "%d", &data[dataCount]) != EOF && dataCount<filesize*blocksize) // max number of integers read are blocksize * filesize
+    dataCount++;
+      
+  //  printf("Read succesfully %d integers\n", dataCount);
+ 
+
+
+}
+
+void populate_data (int node){
+  // reads all the files the current node is responsible for 
+  
+  char  fname[1000];
+
+  int i = 0; // the number of files each processor will have to read 
+  // printf("%d is the blocksize\n",blocksize);
+
+  for(i = blocksize*node; i < blocksize*(node+1); i++){
+
+    get_file_name(fname,i); // the name of the ith file is stored in fname 
+    read_integers(fname);  // integers from fname are read into global data 
+  
+  }
+
+
+}
+
+
+void populate_clusters(int clustersPerNode){
+  // this function initalizes the clusters 
+  int dataPerCluster = dataCount/clustersPerNode;  
+  // printf("Clusters per node = %d data count = %d dataPerCluster = %d\n ",clustersPerNode,dataCount, dataPerCluster);
+  
+  int i = 0,j = 0;
+  for(i = 0;i < clustersPerNode;i++) {
+    for(j = i*dataPerCluster; j<(i+1)*dataPerCluster; j++){
+      cluster[i][cluster_pointer[i]] = data[j]; // ith cluster adds new data 
+      cluster_pointer[i] ++; // increment its pointer
+      
+      
+    }
+
+    printf("%d th cluster has %d data at the beginning\n",i,cluster_pointer[i]);
+  }
+  
+}
+
+
+
+void broadcast_mean(int clustersPerNode, int node){
+  int i=0,j=0,k=0;
+  float packets[cK];
+   
+  for(i=0; i<clustersPerNode; i++){
+    int sum = 0;
+
+    for(j=0; j<cluster_pointer[i]; j++)
+      sum += cluster[i][j];
+    
+    float clusterMean = sum*1.0/cluster_pointer[i]; // using integers for approximation 
+    
+    printf("%.3f is the clusterMean for  %d#%d\n", clusterMean,node,i);
+    
+    
+    // now this needs to be broadcast 
+    // multiple options here : calculate all means and then broadcast or broadcast one by one i.e batch vs individual
+    // note : this has to asychronous
+    // broadcase needs to be of the form <mean, node#,  cluster#> which here is <clusterMean, node, i> --- could be an integer a[3]
+    
+    float packet[2] = {clusterMean,i};
+     MPI_Status status;
+    for(k=0;k<np;k++){
+      if(k!=node){
+	float cent[1];
+	MPI_Sendrecv(&clusterMean,1,MPI_FLOAT,k,1,
+		    &centers[k][i],1,MPI_FLOAT,k,1,MPI_COMM_WORLD,&status);
+	
+	//centers[k][i] = cent[0];
+	/*MPI_Sendrecv(clusterMean,1,MPI_FLOAT,k,1,
+		     centers[k][i],1,MPI_FLOAT,k,1,MPI_COMM_WORLD,&status);
+	MPI_Sendrecv(i,1,MPI_INT,k,2,
+		     ,3,MPI_FLOAT,k,1,MPI_COMM_WORLD,&status);
+	MPI_Sendrecv(packet,3,MPI_FLOAT,k,1,
+		     packets[k],3,MPI_FLOAT,k,1,MPI_COMM_WORLD,&status);
+	*/
+      }
+    }
+    
+  }
+    
+  
+  if(node==0)
+    for(i=0;i<np;i++){
+      printf("node %d -- centers -- \n",i);
+      for(j=0;j<cK/np;j++){
+	printf("%.3f ",centers[i][j]); // dekhte hai sequential hai ke nahi 
+      }
+      printf("\n");
+
+    }
+}
+
+
+int main (int argv, char ** argc) {
+
+  MPI_Init(&argv,&argc);
+  int node,csize,i,temp;
+  MPI_Comm_rank(MPI_COMM_WORLD,&node);
+  MPI_Comm_size(MPI_COMM_WORLD,&csize);
+  
+  populate_data(node);
+  populate_clusters(cK/np); // clusters per node is the parameter
+  // recieve_means(cK/np,node); 
+  broadcast_mean(cK/np,node); // same as above
+
+  int sum = 0;
+  for(i=0;i<dataCount;i++)
+    sum += data[i];
+
+  
+  //  printf("sum for node#%d = %d for %d integers\n",node,sum,dataCount);
+
+  int othersSum = 0;
+  if(node)
+    MPI_Send(&sum,1,MPI_INT,0,0,MPI_COMM_WORLD);
+  else 
+    for(i=1;i<np;i++){
+      MPI_Recv(&othersSum,1,MPI_INT,i,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+      sum = sum + othersSum;
+    }
+ 
+  if(!node)
+    printf("NET_SUM = %d\n",sum);
+  
+  MPI_Finalize();
+  return 0;
+}
